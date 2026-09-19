@@ -192,6 +192,15 @@ static void wlan_worker_fn(void* arg) {
                 esp_wifi_deinit();
                 ok = false;
             }
+#if CONFIG_IDF_TARGET_ESP32C5
+            else {
+                /* AUTO scans both bands; the C5 radio still uses one band at a time. */
+                err = esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO);
+                if(err != ESP_OK) {
+                    ESP_LOGW(TAG, "dual-band scan unavailable: %s", esp_err_to_name(err));
+                }
+            }
+#endif
             break;
 
         case WCMD_STOP_DEINIT:
@@ -218,7 +227,11 @@ static void wlan_worker_fn(void* arg) {
             strncpy((char*)wcfg.sta.ssid, cmd.connect.ssid, 32);
             if(cmd.connect.password[0]) {
                 strncpy((char*)wcfg.sta.password, cmd.connect.password, 64);
+#if CONFIG_IDF_TARGET_ESP32C5
+                wcfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
+#else
                 wcfg.sta.threshold.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+#endif
             } else {
                 wcfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
             }
@@ -229,7 +242,12 @@ static void wlan_worker_fn(void* arg) {
             if(cmd.connect.channel) {
                 wcfg.sta.channel = cmd.connect.channel;
             }
-            wcfg.sta.pmf_cfg.capable = false;
+            wcfg.sta.pmf_cfg.capable =
+#if CONFIG_IDF_TARGET_ESP32C5
+                true;
+#else
+                false;
+#endif
             wcfg.sta.pmf_cfg.required = false;
             s_wifi_auto_reconnect = true;
             esp_wifi_set_config(WIFI_IF_STA, &wcfg);
@@ -266,7 +284,9 @@ static void wlan_worker_fn(void* arg) {
         }
 
         case WCMD_SET_CHANNEL:
-            esp_wifi_set_channel(cmd.set_channel.channel, WIFI_SECOND_CHAN_NONE);
+            err = esp_wifi_set_channel(cmd.set_channel.channel, WIFI_SECOND_CHAN_NONE);
+            if(err != ESP_OK) ESP_LOGW(TAG, "channel %u rejected: %s",
+                cmd.set_channel.channel, esp_err_to_name(err));
             break;
 
         case WCMD_SET_PROMISC:
@@ -516,7 +536,10 @@ bool wlan_hal_send_eth_raw(const uint8_t* data, uint16_t len) {
 }
 
 void wlan_hal_set_channel(uint8_t channel) {
-    if(!s_started || channel < 1 || channel > 14) return;
+    if(!s_started || channel < 1) return;
+#if !CONFIG_IDF_TARGET_ESP32C5
+    if(channel > 14) return;
+#endif
     WlanCmd cmd = {.type = WCMD_SET_CHANNEL, .set_channel = {.channel = channel}};
     wlan_send_cmd_sync(&cmd);
 }

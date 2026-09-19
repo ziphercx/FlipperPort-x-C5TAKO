@@ -11,6 +11,7 @@
 #include "furi_hal_resources.h"
 #include "furi_hal_spi.h"
 #include "furi_hal_spi_bus.h"
+#include "boards/board.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -21,12 +22,18 @@
 #include <esp_memory_utils.h>
 #include <sdmmc_cmd.h>
 #include <driver/sdspi_host.h>
+#include <driver/spi_master.h>
+#include <driver/gpio.h>
 
 static const char* TAG = "FuriHalSd";
 
 #define SD_FATFS_DRIVE "0:"
 #define SD_SPI_HOST    SPI2_HOST
-#define SD_MAX_FREQ    (20 * 1000) /* 20 MHz — conservative for shared bus */
+#ifdef BOARD_SD_MAX_FREQ_KHZ
+#define SD_MAX_FREQ BOARD_SD_MAX_FREQ_KHZ
+#else
+#define SD_MAX_FREQ (20 * 1000)
+#endif
 #define SD_BOUNCE_SECTORS 8 /* 4 KiB persistent DMA bounce buffer */
 
 static sdmmc_card_t* sd_card = NULL;
@@ -69,6 +76,38 @@ static bool sd_host_conflicts_with(const FuriHalSpiBus* bus) {
            bus->mosi_pin == gpio_sdcard_cs.pin || bus->miso_pin == gpio_sdcard_cs.pin ||
            bus->sck_pin == gpio_sdcard_cs.pin;
 }
+
+#ifdef BOARD_SD_IDLE_CLOCK_BYTES
+static void sd_send_idle_clocks(void) {
+    /* Match the known-working C5TAKO sequence before SDSPI sends CMD0. */
+    gpio_set_level((gpio_num_t)gpio_lcd_cs.pin, 1);
+    gpio_set_direction((gpio_num_t)gpio_sdcard_cs.pin, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)gpio_sdcard_cs.pin, 1);
+    gpio_set_level((gpio_num_t)BOARD_PIN_CC1101_CSN, 1);
+
+    spi_device_interface_config_t config = {
+        .clock_speed_hz = 400000,
+        .mode = 0,
+        .spics_io_num = -1,
+        .queue_size = 1,
+    };
+    spi_device_handle_t device;
+    esp_err_t err = spi_bus_add_device(SD_SPI_HOST, &config, &device);
+    if(err != ESP_OK) {
+        ESP_LOGW(TAG, "SD idle clocks unavailable: %s", esp_err_to_name(err));
+        return;
+    }
+    uint32_t idle_words[(BOARD_SD_IDLE_CLOCK_BYTES + 3) / 4];
+    memset(idle_words, 0xFF, sizeof(idle_words));
+    spi_transaction_t transaction = {
+        .length = BOARD_SD_IDLE_CLOCK_BYTES * 8,
+        .tx_buffer = idle_words,
+    };
+    err = spi_device_polling_transmit(device, &transaction);
+    if(err != ESP_OK) ESP_LOGW(TAG, "SD idle clocks failed: %s", esp_err_to_name(err));
+    spi_bus_remove_device(device);
+}
+#endif
 
 static uint16_t sd_read_le16(const uint8_t* data) {
     return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
@@ -545,6 +584,10 @@ static bool sd_prepare_card(void) {
 
     sd_release_host();
 
+#ifdef BOARD_SD_POWER_SETTLE_MS
+    vTaskDelay(pdMS_TO_TICKS(BOARD_SD_POWER_SETTLE_MS));
+#endif
+
     ESP_LOGI(TAG, "Initializing SD card on SPI2_HOST, CS=GPIO%d", gpio_sdcard_cs.pin);
 
     sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
@@ -566,12 +609,18 @@ static bool sd_prepare_card(void) {
         dev_cfg.gpio_wp,
         dev_cfg.gpio_int,
         host.max_freq_khz);
+    ESP_LOGI(TAG, "SDSPI pins: sck=%u mosi=%u miso=%u",
+        gpio_lcd_clk.pin, gpio_lcd_din.pin, gpio_sdcard_miso.pin);
 
     esp_err_t ret = ESP_OK;
     furi_hal_spi_bus_lock();
     do {
         ret = sdspi_host_init();
         if(ret != ESP_OK) break;
+
+#ifdef BOARD_SD_IDLE_CLOCK_BYTES
+        sd_send_idle_clocks();
+#endif
 
         ret = sdspi_host_init_device(&dev_cfg, &sd_handle);
         if(ret != ESP_OK) break;
@@ -589,8 +638,8 @@ static bool sd_prepare_card(void) {
 
     if(ret != ESP_OK) {
         ESP_LOGE(TAG, "SD init failed: %s", esp_err_to_name(ret));
-        sd_run_mount_diagnostics(&dev_cfg, &host);
         sd_release_host();
+        sd_run_mount_diagnostics(&dev_cfg, &host);
         return false;
     }
 

@@ -82,24 +82,24 @@ APPS = [
 
 # Boards without NFC / IR hardware – exclude the corresponding apps
 _board = os.environ.get("FLIPPER_BOARD", "")
-_boards_without_nfc = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47"}
-_boards_without_ir = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47"}
+_boards_without_nfc = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47", "c5tako"}
+_boards_without_ir = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47", "c5tako"}
 
 # Wolf3D shares Doom's requirements (PSRAM, ST7789 320xN, I2S speaker).
 # Doom läuft ebenfalls nur auf T-Embed (PSRAM + 16 MB Flash) — wird aber als
 # externer FAP gebaut (steht nicht in APPS), Block bleibt unten zur Klarheit.
-_boards_without_wolf3d = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47"}
+_boards_without_wolf3d = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47", "c5tako"}
 
 if _board in _boards_without_nfc:
     APPS = [a for a in APPS if a != "nfc"]
 
 # waveshare_c6_1.9: external CC1101 module wired up (pins in board_waveshare_c6_1.9.h,
 # BOARD_HAS_SUBGHZ=1) → SubGHz built in. 1.47 has no module → stays excluded.
-_boards_without_subghz = {"waveshare_c6_1.47"}
+_boards_without_subghz = {"waveshare_c6_1.47", "c5tako"}
 
 # NRF24 plugs into the LORA slot (T-Embed CC1101). Boards without the slot
 # don't have the required pin defines.
-_boards_without_nrf24 = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47"}
+_boards_without_nrf24 = {"waveshare_c6", "waveshare_c6_1.9", "waveshare_c6_1.47", "c5tako"}
 
 if _board in _boards_without_ir:
     APPS = [a for a in APPS if a not in ("infrared", "js_infrared")]
@@ -127,6 +127,8 @@ if _board in _boards_without_nrf24:
 
 if _board in _boards_without_wolf3d:
     APPS = [a for a in APPS if a != "wolf3d"]
+if _board == "c5tako":
+    APPS = [a for a in APPS if a != "streaming"]  # no I2S speaker
 # (wolf3d und doom stehen nicht in APPS — externer FAP-Pfad. Block bleibt für Klarheit.)
 
 EXTRA_EXT_APPS = []

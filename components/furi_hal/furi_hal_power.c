@@ -76,7 +76,10 @@ static esp_pm_sleep_cbs_register_config_t furi_hal_power_ls_cbs = {
 #define FURI_HAL_POWER_LOW_BATTERY_THRESHOLD_V  (3.35f)
 #define FURI_HAL_POWER_EMPTY_BATTERY_VOLTAGE_V  (3.27f)
 #define FURI_HAL_POWER_FULL_BATTERY_VOLTAGE_V   (4.20f)
-#define FURI_HAL_POWER_ADC_DIVIDER_RATIO        (3.0f)
+#ifndef BOARD_BATTERY_DIVIDER_RATIO
+#define BOARD_BATTERY_DIVIDER_RATIO (3.0f)
+#endif
+#define FURI_HAL_POWER_ADC_DIVIDER_RATIO BOARD_BATTERY_DIVIDER_RATIO
 #define FURI_HAL_POWER_SAMPLE_REFRESH_US        (250000LL)
 #define FURI_HAL_POWER_CHARGE_LIMIT_MIN_V       (3.840f)
 #define FURI_HAL_POWER_CHARGE_LIMIT_MAX_V       (4.208f)
@@ -269,8 +272,17 @@ static void furi_hal_power_refresh_sample(void) {
         return;
     }
 
+#ifdef BOARD_PIN_BATTERY_EN
+    gpio_set_level((gpio_num_t)BOARD_PIN_BATTERY_EN, 1);
+    vTaskDelay(pdMS_TO_TICKS(3));
+#endif
     int raw_value = 0;
-    if(adc_oneshot_read(furi_hal_power.adc_handle, furi_hal_power.adc_channel, &raw_value) != ESP_OK) {
+    esp_err_t read_result = adc_oneshot_read(
+        furi_hal_power.adc_handle, furi_hal_power.adc_channel, &raw_value);
+#ifdef BOARD_PIN_BATTERY_EN
+    gpio_set_level((gpio_num_t)BOARD_PIN_BATTERY_EN, 0);
+#endif
+    if(read_result != ESP_OK) {
         furi_hal_power.last_sample_ok = false;
         return;
     }
@@ -324,6 +336,11 @@ static float furi_hal_power_get_estimated_battery_voltage(void) {
 
 void furi_hal_power_init(void) {
     furi_hal_power_ensure_initialized();
+
+#ifdef BOARD_PIN_BATTERY_EN
+    gpio_set_level((gpio_num_t)BOARD_PIN_BATTERY_EN, 0);
+    gpio_set_direction((gpio_num_t)BOARD_PIN_BATTERY_EN, GPIO_MODE_OUTPUT);
+#endif
 
 #if CONFIG_PM_ENABLE
     /* Dynamic frequency scaling: let the CPU idle at 80 MHz and ramp to 160 MHz
@@ -411,6 +428,10 @@ bool furi_hal_power_gauge_is_ok(void) {
 }
 
 bool furi_hal_power_is_shutdown_requested(void) {
+#ifdef BOARD_PIN_BATTERY_EN
+    /* No VBUS sense on XIAO C5: battery ADC cannot tell if USB is charging. */
+    return false;
+#endif
     const float battery_voltage = furi_hal_power_get_estimated_battery_voltage();
     return !furi_hal_power_is_usb_present() &&
            (battery_voltage > 0.0f) &&
@@ -517,6 +538,9 @@ uint8_t furi_hal_power_get_bat_health_pct(void) {
 }
 
 bool furi_hal_power_is_charging(void) {
+#ifdef BOARD_PIN_BATTERY_EN
+    return false; /* C5TAKO has no charger status signal. */
+#endif
     /* Prefer BQ25896 charger status (like STM32), fallback to BQ27220 */
     if(furi_hal_bq25896_is_present()) {
         return furi_hal_bq25896_is_charging();

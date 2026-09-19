@@ -52,7 +52,8 @@ void wlan_app_scene_ssid_screen_on_enter(void* context) {
 
     // Channel links + Lock/Unlock-Icon rechts in derselben Zeile.
     char ch_buf[16];
-    snprintf(ch_buf, sizeof(ch_buf), "Channel: %u", (unsigned)ap->channel);
+    snprintf(ch_buf, sizeof(ch_buf), "Ch:%u %s", (unsigned)ap->channel,
+        ap->channel > 14 ? "5 GHz" : "2.4 GHz");
     widget_add_string_element(
         app->widget, 2, 44, AlignLeft, AlignBottom, FontSecondary, ch_buf);
 
@@ -60,8 +61,11 @@ void wlan_app_scene_ssid_screen_on_enter(void* context) {
     const Icon* lock = unlocked ? &I_Unlock_7x8 : &I_Lock_7x8;
     widget_add_icon_element(app->widget, 128 - 7 - 4, 36, lock);
 
-    widget_add_button_element(
-        app->widget, GuiButtonTypeLeft, "Attack", ssid_screen_select_cb, app);
+#if CONFIG_IDF_TARGET_ESP32C5
+    if(ap->channel <= 14)
+#endif
+        widget_add_button_element(
+            app->widget, GuiButtonTypeLeft, "Attack", ssid_screen_select_cb, app);
     widget_add_button_element(
         app->widget, GuiButtonTypeRight, "Connect", ssid_screen_connect_cb, app);
 
@@ -77,6 +81,9 @@ bool wlan_app_scene_ssid_screen_on_event(void* context, SceneManagerEvent event)
         WlanApRecord* ap = &app->ap_records[app->ap_selected_index];
 
         if(event.event == WlanAppCustomEventSsidSelect) {
+#if CONFIG_IDF_TARGET_ESP32C5
+            if(ap->channel > 14) return true;
+#endif
             memcpy(&app->target_ap, ap, sizeof(WlanApRecord));
             app->target_selected = true;
             scene_manager_next_scene(app->scene_manager, WlanAppSceneNetworkActions);

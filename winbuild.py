@@ -47,21 +47,26 @@ BOARDS = {
     "waveshare_c6_1.9":  ("waveshare_c6_1.9",      "esp32c6", "build_waveshare_c6"),
     "waveshare_c6_1.47": ("waveshare_c6_1.47",     "esp32c6", "build_waveshare_c6_1.47"),
     "thormini":          ("thormini",              "esp32s3", "build_thormini"),
+    "c5tako":            ("c5tako",                "esp32c5", "build_c5tako_idf55"),
 }
 
 REPO_ROOT = Path(__file__).resolve().parent
 
 
 def _board_cmake_args(flipper_board: str, build_dir: str) -> str:
+    if flipper_board == "c5tako":
+        return f"-B {build_dir}"
     args = f"-B {build_dir} -DFLIPPER_BOARD={flipper_board}"
     board_defaults = REPO_ROOT / f"sdkconfig.defaults.{flipper_board}"
     if board_defaults.exists():
-        args += f' -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.{flipper_board}"'
+        defaults = (f"sdkconfig.defaults.{flipper_board}" if flipper_board == "c5tako"
+                    else f"sdkconfig.defaults;sdkconfig.defaults.{flipper_board}")
+        args += f' -DSDKCONFIG_DEFAULTS="{defaults}"'
     return args
 
 
 def get_esp_idf_dir() -> Path:
-    p = Path(os.environ.get("ESP_IDF_DIR", DEFAULT_ESP_IDF_DIR))
+    p = Path(os.environ.get("ESP_IDF_DIR", os.environ.get("IDF_PATH", DEFAULT_ESP_IDF_DIR)))
     if not p.exists():
         sys.exit(
             f"ESP_IDF_DIR '{p}' does not exist. "
@@ -108,15 +113,17 @@ def cmd_check(args):
 
 def cmd_build(args):
     flipper_board, target, build_dir = BOARDS[args.board]
-    _purge_stale_sdkconfig(target, build_dir)
+    if flipper_board != "c5tako":
+        _purge_stale_sdkconfig(target, build_dir)
     common = _board_cmake_args(flipper_board, build_dir)
     esp_idf_dir = get_esp_idf_dir()
     # FLIPPER_BOARD must also be in the env: fam_config.py reads it via
     # os.environ to filter board-incompatible apps (e.g. NFC/IR on Waveshare C6).
     extra = {"FLIPPER_BOARD": flipper_board}
-    rc = run_with_idf_env(esp_idf_dir, f"{common} set-target {target}", extra)
-    if rc != 0:
-        return rc
+    if flipper_board != "c5tako" or _sdkconfig_target(REPO_ROOT / build_dir / "sdkconfig") != target:
+        rc = run_with_idf_env(esp_idf_dir, f"{common} set-target {target}", extra)
+        if rc != 0:
+            return rc
     return run_with_idf_env(esp_idf_dir, f"{common} reconfigure build", extra)
 
 
@@ -242,7 +249,8 @@ def cmd_cross_build(args):
         flipper_board, target, build_dir = BOARDS[board]
         print(f"\n=== {board} ({target}, FLIPPER_BOARD={flipper_board}) ===")
 
-        _purge_stale_sdkconfig(target, build_dir)
+        if flipper_board != "c5tako":
+            _purge_stale_sdkconfig(target, build_dir)
 
         common = _board_cmake_args(flipper_board, build_dir)
         extra = {"FLIPPER_BOARD": flipper_board}

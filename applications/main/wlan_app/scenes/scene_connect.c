@@ -12,6 +12,10 @@ static void connect_open_menu_for_selected(WlanApp* app) {
     if(sel >= app->ap_count) return;
     app->ap_selected_index = sel;
 
+#if CONFIG_IDF_TARGET_ESP32C5
+    if(app->ap_records[sel].channel > 14) return; /* 5 GHz: connection only. */
+#endif
+
     wlan_connect_view_clear_menu(app->view_connect);
     wlan_connect_view_add_menu_item(app->view_connect, "Handshake", CONNECT_MENU_HANDSHAKE);
     wlan_connect_view_add_menu_item(app->view_connect, "Deauth", CONNECT_MENU_DEAUTH);
@@ -59,7 +63,14 @@ void wlan_app_scene_connect_on_enter(void* context) {
     for(uint16_t i = 0; i < app->ap_count; ++i) {
         WlanApRecord* r = &app->ap_records[i];
         bool unlocked = r->is_open || r->has_password;
-        wlan_connect_view_add_ap(app->view_connect, r->ssid, unlocked, i);
+        char label[40];
+#if CONFIG_IDF_TARGET_ESP32C5
+        snprintf(label, sizeof(label), "%s %s", r->channel > 14 ? "5G" : "2G",
+            r->ssid);
+#else
+        snprintf(label, sizeof(label), "%s", r->ssid);
+#endif
+        wlan_connect_view_add_ap(app->view_connect, label, unlocked, i);
     }
 
     uint8_t restore = scene_manager_get_scene_state(app->scene_manager, WlanAppSceneConnect);

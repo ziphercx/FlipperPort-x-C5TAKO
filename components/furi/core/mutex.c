@@ -8,12 +8,10 @@
 
 #include "event_loop_link_i.h"
 
-// Internal FreeRTOS member names
-#define ucQueueType ucDummy9
-
 struct FuriMutex {
     StaticSemaphore_t container;
     FuriEventLoopLink event_loop_link;
+    FuriMutexType type;
 };
 
 // IMPORTANT: container MUST be the FIRST struct member
@@ -36,6 +34,7 @@ FuriMutex* furi_mutex_alloc(FuriMutexType type) {
     }
 
     furi_check(hMutex == (SemaphoreHandle_t)instance);
+    instance->type = type;
 
     return instance;
 }
@@ -56,14 +55,14 @@ FuriStatus furi_mutex_acquire(FuriMutex* instance, uint32_t timeout) {
     furi_check(instance);
 
     SemaphoreHandle_t hMutex = (SemaphoreHandle_t)(instance);
-    const uint8_t mutex_type = instance->container.ucQueueType;
+    const FuriMutexType mutex_type = instance->type;
 
     FuriStatus stat = FuriStatusOk;
 
     if(FURI_IS_IRQ_MODE()) {
         stat = FuriStatusErrorISR;
 
-    } else if(mutex_type == queueQUEUE_TYPE_RECURSIVE_MUTEX) {
+    } else if(mutex_type == FuriMutexTypeRecursive) {
         if(xSemaphoreTakeRecursive(hMutex, timeout) != pdPASS) {
             if(timeout != 0U) {
                 stat = FuriStatusErrorTimeout;
@@ -72,7 +71,7 @@ FuriStatus furi_mutex_acquire(FuriMutex* instance, uint32_t timeout) {
             }
         }
 
-    } else if(mutex_type == queueQUEUE_TYPE_MUTEX) {
+    } else if(mutex_type == FuriMutexTypeNormal) {
         if(xSemaphoreTake(hMutex, timeout) != pdPASS) {
             if(timeout != 0U) {
                 stat = FuriStatusErrorTimeout;
@@ -96,19 +95,19 @@ FuriStatus furi_mutex_release(FuriMutex* instance) {
     furi_check(instance);
 
     SemaphoreHandle_t hMutex = (SemaphoreHandle_t)(instance);
-    const uint8_t mutex_type = instance->container.ucQueueType;
+    const FuriMutexType mutex_type = instance->type;
 
     FuriStatus stat = FuriStatusOk;
 
     if(FURI_IS_IRQ_MODE()) {
         stat = FuriStatusErrorISR;
 
-    } else if(mutex_type == queueQUEUE_TYPE_RECURSIVE_MUTEX) {
+    } else if(mutex_type == FuriMutexTypeRecursive) {
         if(xSemaphoreGiveRecursive(hMutex) != pdPASS) {
             stat = FuriStatusErrorResource;
         }
 
-    } else if(mutex_type == queueQUEUE_TYPE_MUTEX) {
+    } else if(mutex_type == FuriMutexTypeNormal) {
         if(xSemaphoreGive(hMutex) != pdPASS) {
             stat = FuriStatusErrorResource;
         }

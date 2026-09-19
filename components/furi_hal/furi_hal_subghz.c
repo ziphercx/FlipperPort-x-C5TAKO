@@ -463,6 +463,11 @@ const GpioPin* furi_hal_subghz_get_data_gpio(void) {
 }
 
 void furi_hal_subghz_init(void) {
+#if !BOARD_HAS_SUBGHZ
+    furi_hal_subghz.connected = false;
+    furi_hal_subghz.state = FuriHalSubGhzStateIdle;
+    return;
+#endif
     /* Note: BOARD_PIN_PWR_EN is set in furi_hal_init_early() */
 
 #if defined(BOARD_PIN_CC1101_SW0) && defined(BOARD_PIN_CC1101_SW1) && \

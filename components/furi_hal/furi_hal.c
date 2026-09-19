@@ -2,12 +2,25 @@
 #include "boards/board.h"
 #include <furi_hal_gpio.h>
 #include <esp_log.h>
+#include <driver/gpio.h>
 #include <nvs_flash.h>
 
 static const char* TAG = "FuriHal";
 
 void furi_hal_init_early(void) {
     furi_hal_cortex_init_early();
+
+#if defined(BOARD_PIN_BUZZER) && defined(BOARD_PIN_USER_LED)
+    /* Leave every device on the shared SPI bus deselected before bus init. */
+    const int idle_high[] = {BOARD_PIN_LCD_CS, BOARD_PIN_SD_CS,
+                             BOARD_PIN_CC1101_CSN, BOARD_PIN_USER_LED};
+    for(size_t i = 0; i < sizeof(idle_high) / sizeof(idle_high[0]); i++) {
+        gpio_set_level((gpio_num_t)idle_high[i], 1);
+        gpio_set_direction((gpio_num_t)idle_high[i], GPIO_MODE_OUTPUT);
+    }
+    gpio_set_level((gpio_num_t)BOARD_PIN_BUZZER, 0);
+    gpio_set_direction((gpio_num_t)BOARD_PIN_BUZZER, GPIO_MODE_OUTPUT);
+#endif
 
 #ifdef BOARD_PIN_PWR_EN
     /* Power-enable must be set early — powers CC1101, BQ27220 fuel gauge, WS2812 */

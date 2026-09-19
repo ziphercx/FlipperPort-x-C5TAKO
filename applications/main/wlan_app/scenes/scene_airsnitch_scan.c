@@ -21,6 +21,9 @@ static void airsnitch_scan_run(WlanApp* app) {
     wlan_hal_scan(&raw, &found, WLAN_APP_MAX_APS);
 
     for(uint16_t i = 0; i < found; ++i) {
+#if CONFIG_IDF_TARGET_ESP32C5
+        if(raw[i].primary > 14) continue; /* Capture path is 2.4 GHz only. */
+#endif
         WlanApRecord* r = &app->ap_records[app->ap_count++];
         memset(r, 0, sizeof(*r));
         strncpy(r->ssid, (const char*)raw[i].ssid, sizeof(r->ssid) - 1);

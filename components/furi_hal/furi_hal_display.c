@@ -65,6 +65,7 @@ static const char* TAG = "FuriHalDisplay";
  * UI Foreground (bg_color, what fills "set" pixels = drawn UI elements). */
 static uint16_t fg_color;
 static uint16_t bg_color;
+static uint16_t margin_color;
 
 /* SPI configuration from board config */
 #define LCD_SPI_HOST   BOARD_LCD_SPI_HOST
@@ -105,12 +106,28 @@ static void furi_hal_display_prepare_flush(void) {
     xSemaphoreTake(lcd_flush_done, 0);
 }
 
-static void furi_hal_display_wait_flush(void) {
-    if(!lcd_flush_done) return;
+static bool furi_hal_display_wait_flush(void) {
+    if(!lcd_flush_done) return true;
 
     if(xSemaphoreTake(lcd_flush_done, pdMS_TO_TICKS(250)) != pdTRUE) {
-        ESP_LOGW(TAG, "Timed out waiting for LCD flush");
+        ESP_LOGW(TAG, "Timed out waiting for LCD flush (DMA free=%u, largest=%u)",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+        return false;
     }
+    return true;
+}
+
+static bool display_draw(size_t x, size_t y, size_t w, size_t h, const uint16_t* pixels) {
+    furi_hal_display_prepare_flush();
+    esp_err_t err = esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + w, y + h, pixels);
+    if(err != ESP_OK) {
+        ESP_LOGE(TAG, "LCD draw failed: %s (DMA free=%u, largest=%u)", esp_err_to_name(err),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+        return false;
+    }
+    return furi_hal_display_wait_flush();
 }
 
 static void furi_hal_display_init_scale_lut(void) {
@@ -123,27 +140,31 @@ static void furi_hal_display_init_scale_lut(void) {
     }
 }
 
-static void display_fill_color(uint16_t color) {
+static bool display_fill_color(uint16_t color) {
     uint16_t* line = heap_caps_malloc(LCD_H_RES * sizeof(uint16_t), MALLOC_CAP_DMA);
-    if(!line) return;
+    if(!line) return false;
     for(int i = 0; i < LCD_H_RES; i++) line[i] = color;
     furi_hal_spi_bus_lock();
+    bool ok = true;
     for(int y = 0; y < LCD_V_RES; y++) {
-        furi_hal_display_prepare_flush();
-        esp_lcd_panel_draw_bitmap(panel_handle, 0, y, LCD_H_RES, y + 1, line);
-        furi_hal_display_wait_flush();
+        if(!display_draw(0, y, LCD_H_RES, 1, line)) {
+            ok = false;
+            break;
+        }
     }
     furi_hal_spi_bus_unlock();
     free(line);
+    return ok;
 }
 
 /* Paint a solid-color rectangle using rgb565_buf as scratch. Caller must hold
  * the SPI bus lock. Chunks vertically at STRIPE_HEIGHT to stay within the
  * buffer's capacity (STRIPE_HEIGHT rows × SCALED_WIDTH cols). Used by the
  * commit path to keep the LCD margins in sync with fg_color changes. */
-static void display_paint_rect(
+static bool display_paint_rect(
     size_t x, size_t y, size_t w, size_t h, uint16_t color) {
-    if(w == 0 || h == 0 || w > LCD_H_RES) return;
+    if(w == 0 || h == 0) return true;
+    if(w > LCD_H_RES) return false;
 
     for(size_t y_off = 0; y_off < h; y_off += STRIPE_HEIGHT) {
         size_t chunk_h = h - y_off;
@@ -152,11 +173,9 @@ static void display_paint_rect(
         const size_t px_count = w * chunk_h;
         for(size_t i = 0; i < px_count; i++) rgb565_buf[i] = color;
 
-        furi_hal_display_prepare_flush();
-        esp_lcd_panel_draw_bitmap(
-            panel_handle, x, y + y_off, x + w, y + y_off + chunk_h, rgb565_buf);
-        furi_hal_display_wait_flush();
+        if(!display_draw(x, y + y_off, w, chunk_h, rgb565_buf)) return false;
     }
+    return true;
 }
 
 void furi_hal_display_init(void) {
@@ -199,7 +218,7 @@ void furi_hal_display_init(void) {
 
     /* Create ST7789 panel */
     esp_lcd_panel_dev_config_t panel_config = {
-        .reset_gpio_num = gpio_lcd_rst.pin,
+        .reset_gpio_num = gpio_lcd_rst.pin == UINT16_MAX ? -1 : gpio_lcd_rst.pin,
 #if defined(BOARD_LCD_COLOR_ORDER_BGR) && BOARD_LCD_COLOR_ORDER_BGR
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
 #else
@@ -219,17 +238,19 @@ void furi_hal_display_init(void) {
      * is in *our* configuration regardless of what ran before. */
 
     /* 1) Hardware reset pulse on RESX (HIGH → LOW → HIGH, generous timing). */
-    gpio_config_t rst_cfg = {
-        .mode = GPIO_MODE_OUTPUT,
-        .pin_bit_mask = 1ULL << gpio_lcd_rst.pin,
-    };
-    gpio_config(&rst_cfg);
-    gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 1);   /* ensure a clean falling edge */
-    vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 0);   /* assert reset (active low) */
-    vTaskDelay(pdMS_TO_TICKS(20));                      /* RESX min low is 10us; be generous */
-    gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 1);   /* release reset */
-    vTaskDelay(pdMS_TO_TICKS(150));                     /* ST7789: wait ≥120ms after reset */
+    if(gpio_lcd_rst.pin != UINT16_MAX) {
+        gpio_config_t rst_cfg = {
+            .mode = GPIO_MODE_OUTPUT,
+            .pin_bit_mask = 1ULL << gpio_lcd_rst.pin,
+        };
+        gpio_config(&rst_cfg);
+        gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 1);
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 0);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        gpio_set_level((gpio_num_t)gpio_lcd_rst.pin, 1);
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
 
     /* 2) Software reset (0x01) — re-loads all registers to factory defaults
      *    even if the RESX pulse above didn't fully take (e.g. a glitch on the
@@ -281,7 +302,7 @@ void furi_hal_display_init(void) {
     }
 
     /* Clear entire screen to background (unset pixels = FG) */
-    display_fill_color(fg_color);
+    if(display_fill_color(fg_color)) margin_color = fg_color;
 
     ESP_LOGI(TAG, "Display initialized (%dx%d, scaled %dx%d, stripe=%d lines, buf=%d bytes)",
              FB_WIDTH, FB_HEIGHT, SCALED_WIDTH, SCALED_HEIGHT, STRIPE_HEIGHT, (int)stripe_bytes);
@@ -303,25 +324,31 @@ void furi_hal_display_commit(const uint8_t* data, uint32_t size) {
      */
     furi_hal_spi_bus_lock();
 
-    /* Repaint the margin strips with the current fg_color every frame so the
-     * entire screen tracks UI Color changes. Without this the init-time fill
-     * persists and the margins keep showing the boot-time orange while the
-     * central framebuffer area updates.
+    /* Repaint margin strips only when the UI background changes. The blank
+     * strips otherwise cause dozens of needless SPI/DMA transactions per frame.
      *
      * Top/bottom strips span the full width; left/right strips (the always-on
      * DISPLAY_SIDE_MARGIN inset, plus any extra from aspect-fit centering) span
      * only the height of the scaled image so they don't overdraw the corners. */
-    if(MARGIN_Y > 0) {
-        display_paint_rect(0, 0, LCD_H_RES, MARGIN_Y, fg_color);
-        display_paint_rect(
-            0, MARGIN_Y + SCALED_HEIGHT,
-            LCD_H_RES, LCD_V_RES - MARGIN_Y - SCALED_HEIGHT, fg_color);
-    }
-    if(MARGIN_X > 0) {
-        display_paint_rect(0, MARGIN_Y, MARGIN_X, SCALED_HEIGHT, fg_color);
-        display_paint_rect(
-            MARGIN_X + SCALED_WIDTH, MARGIN_Y,
-            LCD_H_RES - MARGIN_X - SCALED_WIDTH, SCALED_HEIGHT, fg_color);
+    if(margin_color != fg_color) {
+        bool margins_ok = true;
+        if(MARGIN_Y > 0) {
+            margins_ok = margins_ok && display_paint_rect(0, 0, LCD_H_RES, MARGIN_Y, fg_color);
+            margins_ok = margins_ok && display_paint_rect(
+                0, MARGIN_Y + SCALED_HEIGHT,
+                LCD_H_RES, LCD_V_RES - MARGIN_Y - SCALED_HEIGHT, fg_color);
+        }
+        if(MARGIN_X > 0) {
+            margins_ok = margins_ok && display_paint_rect(0, MARGIN_Y, MARGIN_X, SCALED_HEIGHT, fg_color);
+            margins_ok = margins_ok && display_paint_rect(
+                MARGIN_X + SCALED_WIDTH, MARGIN_Y,
+                LCD_H_RES - MARGIN_X - SCALED_WIDTH, SCALED_HEIGHT, fg_color);
+        }
+        if(!margins_ok) {
+            furi_hal_spi_bus_unlock();
+            return;
+        }
+        margin_color = fg_color;
     }
 
     for(size_t stripe_y = 0; stripe_y < SCALED_HEIGHT; stripe_y += STRIPE_HEIGHT) {
@@ -346,13 +373,8 @@ void furi_hal_display_commit(const uint8_t* data, uint32_t size) {
         }
 
         /* DMA send this stripe */
-        furi_hal_display_prepare_flush();
-        esp_lcd_panel_draw_bitmap(
-            panel_handle,
-            MARGIN_X, MARGIN_Y + stripe_y,
-            MARGIN_X + SCALED_WIDTH, MARGIN_Y + stripe_y + stripe_h,
-            rgb565_buf);
-        furi_hal_display_wait_flush();
+        if(!display_draw(MARGIN_X, MARGIN_Y + stripe_y,
+                         SCALED_WIDTH, stripe_h, rgb565_buf)) break;
     }
 
     furi_hal_spi_bus_unlock();

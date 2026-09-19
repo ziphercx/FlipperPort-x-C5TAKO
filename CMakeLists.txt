@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 
+if("$ENV{FLIPPER_BOARD}" STREQUAL "c5tako")
+    set(FLIPPER_BOARD "c5tako" CACHE STRING "Target board")
+    set(SDKCONFIG "${CMAKE_SOURCE_DIR}/build_c5tako_idf55/sdkconfig")
+    set(SDKCONFIG_DEFAULTS "${CMAKE_SOURCE_DIR}/sdkconfig.defaults.c5tako")
+endif()
+
 set(EXTRA_COMPONENT_DIRS "components")
 
 # ---------------------------------------------------------------------------

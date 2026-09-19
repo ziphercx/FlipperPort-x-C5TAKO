@@ -12,6 +12,7 @@
 
 #include <esp_wifi.h>
 #include <esp_now.h>
+#include <esp_idf_version.h>
 #include <esp_netif.h>
 #include <esp_event.h>
 #include <esp_mac.h>
@@ -184,8 +185,13 @@ static bool mesh_enqueue(const uint8_t mac[MESH_MAC_LEN], const uint8_t* data, u
 
 /* ─────── ESP-NOW callbacks (run in WiFi-internal task context) ─────── */
 
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+static void on_send_cb(const esp_now_send_info_t* info, esp_now_send_status_t status) {
+    (void)info;
+#else
 static void on_send_cb(const uint8_t* mac, esp_now_send_status_t status) {
     (void)mac;
+#endif
     if(status != ESP_NOW_SEND_SUCCESS) {
         FURI_LOG_D(TAG, "send fail");
     }

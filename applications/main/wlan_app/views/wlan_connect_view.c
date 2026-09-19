@@ -91,7 +91,10 @@ static void wlan_connect_view_draw_callback(Canvas* canvas, void* _model) {
             canvas_set_color(canvas, ColorWhite);
         }
 
-        canvas_draw_str(canvas, 3, y + 9, ap->ssid);
+        FuriString* label = furi_string_alloc_set(ap->ssid);
+        elements_string_fit_width(canvas, label, 108);
+        canvas_draw_str(canvas, 3, y + 9, furi_string_get_cstr(label));
+        furi_string_free(label);
 
         const Icon* icon = ap->unlocked ? &I_Unlock_7x8 : &I_Lock_7x8;
         uint16_t iw = icon_get_width(icon);

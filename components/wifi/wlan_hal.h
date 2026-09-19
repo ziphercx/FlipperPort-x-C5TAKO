@@ -65,7 +65,7 @@ uint32_t wlan_hal_get_gw_ip(void);
  *  via esp_wifi_internal_tx(). Für ARP-Injection durch wlan_netcut. */
 bool wlan_hal_send_eth_raw(const uint8_t* data, uint16_t len);
 
-/** Setzt den primären Kanal (1..14). */
+/** Set primary channel; ESP-IDF validates band and regulatory availability. */
 void wlan_hal_set_channel(uint8_t channel);
 
 /** Aktiviert/deaktiviert Promiscuous-RX. cb wird beim Aktivieren gesetzt

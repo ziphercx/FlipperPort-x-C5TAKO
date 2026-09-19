@@ -28,7 +28,7 @@ static const Icon* const* portraits[MOODS_TOTAL] = {portrait_happy, portrait_ok,
 static void input_callback(InputEvent* input, void* ctx) {
     FuriSemaphore* semaphore = ctx;
 
-    if((input->type == InputTypeShort) && (input->key == InputKeyBack)) {
+    if(input->type == InputTypeShort) {
         furi_semaphore_release(semaphore);
     }
 }
